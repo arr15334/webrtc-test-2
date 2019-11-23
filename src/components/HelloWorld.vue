@@ -1,40 +1,217 @@
 <template>
   <div class="hello">
-    <h1>{{ msg }}</h1>
-    <p>
-      For a guide and recipes on how to configure / customize this project,<br>
-      check out the
-      <a href="https://cli.vuejs.org" target="_blank" rel="noopener">vue-cli documentation</a>.
-    </p>
-    <h3>Installed CLI Plugins</h3>
-    <ul>
-      <li><a href="https://github.com/vuejs/vue-cli/tree/dev/packages/%40vue/cli-plugin-babel" target="_blank" rel="noopener">babel</a></li>
-      <li><a href="https://github.com/vuejs/vue-cli/tree/dev/packages/%40vue/cli-plugin-eslint" target="_blank" rel="noopener">eslint</a></li>
-    </ul>
-    <h3>Essential Links</h3>
-    <ul>
-      <li><a href="https://vuejs.org" target="_blank" rel="noopener">Core Docs</a></li>
-      <li><a href="https://forum.vuejs.org" target="_blank" rel="noopener">Forum</a></li>
-      <li><a href="https://chat.vuejs.org" target="_blank" rel="noopener">Community Chat</a></li>
-      <li><a href="https://twitter.com/vuejs" target="_blank" rel="noopener">Twitter</a></li>
-      <li><a href="https://news.vuejs.org" target="_blank" rel="noopener">News</a></li>
-    </ul>
-    <h3>Ecosystem</h3>
-    <ul>
-      <li><a href="https://router.vuejs.org" target="_blank" rel="noopener">vue-router</a></li>
-      <li><a href="https://vuex.vuejs.org" target="_blank" rel="noopener">vuex</a></li>
-      <li><a href="https://github.com/vuejs/vue-devtools#vue-devtools" target="_blank" rel="noopener">vue-devtools</a></li>
-      <li><a href="https://vue-loader.vuejs.org" target="_blank" rel="noopener">vue-loader</a></li>
-      <li><a href="https://github.com/vuejs/awesome-vue" target="_blank" rel="noopener">awesome-vue</a></li>
-    </ul>
+    <input type="text" v-model="username">
+    <button @click="createRoom">Create Room</button>
+    <video id="selfview" autoplay></video>
+    <video id="remoteview"></video>
   </div>
 </template>
 
 <script>
+import io from 'socket.io-client'
+
 export default {
   name: 'HelloWorld',
   props: {
-    msg: String
+    theSocket: Object,
+    userId: String
+  },
+  data () {
+    return {
+      caller: null,
+      username: null,
+      socketio: null, //io('http://localhost:8100/qwerasdfqwer'),
+      isStreamer: false,
+      streamerId: null,
+      localsdp: null,
+      remotesdp: null,
+      localUserMedia: null
+    }
+  },
+  methods: {
+    getCam: function () {
+      return navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 400 },
+        audio: true
+      })
+    },
+    createRoom: function () {
+      return null
+    },
+    prepareCaller: function () {
+      console.log('preparing caller')
+      // Initializing a peer connection
+      this.caller = new window.RTCPeerConnection()
+      // Listen for ICE Candidates and send them to remote peers
+      let onice = function (evt) {
+        console.log('onicecandidate called')
+        if (!evt.candidate) return
+        this.onIceCandidate(this.caller, evt)
+      }
+      this.caller.onicecandidate = onice.bind(this)
+      // onaddstream handler to receive remote feed and show in remoteview video element
+      this.caller.onaddstream = function (evt) {
+        console.log('onaddstream called')
+        if (window.URL) {
+          document.getElementById('remoteview').srcObject = evt.stream
+        } else {
+          document.getElementById('remoteview').src = evt.stream
+        }
+      }
+    },
+    enterConference: function () {
+      console.log('...joining ' + this.theSocket.namespace)
+      if (!this.isStreamer) {
+        console.log('no es streamer')
+        this.caller.createOffer()
+          .then((desc) => {
+            console.log(desc)
+            this.caller.setLocalDescription(new RTCSessionDescription(desc))
+            this.socketio.emit('client-sdp',{
+              'sdp': desc,
+              'userId': this.userId
+              })
+          })
+      } else {
+        /*
+        this.getCam()
+        .then((stream) => {
+          if (window.URL) {
+            document.getElementById('selfview').srcObject = stream
+          } else {
+            document.getElementById('selfview').src = stream
+          }
+          // this.toggleEndCallButton()
+          this.caller.addStream(stream)
+          this.localUserMedia = stream
+          return this.caller.createOffer()
+          .then((desc) => {
+            this.caller.setLocalDescription(new RTCSessionDescription(desc))
+            this.socketio.emit('client-sdp', {'sdp': desc})
+          })
+          .catch(error => {
+            console.log('an error occured', error)
+          })
+        })
+        */
+      }
+    },
+    clientSDP: function (msg) {
+      console.log('enter clientSDP')
+      // pidiendo al streamer que encienda su camara
+      this.getCam()
+        .then(stream => {
+          this.localUserMedia = stream
+          // this.toggleEndCallButton()
+          if (window.URL) {
+            document.getElementById('selfview').srcObject = stream
+          } else {
+            document.getElementById('selfview').src = stream
+          }
+          this.caller.addStream(stream)
+          let sessionDesc = new RTCSessionDescription(msg.sdp)
+          this.caller.setRemoteDescription(sessionDesc)
+          this.caller.createAnswer()
+            .then((sdp) => {
+              this.caller.setLocalDescription(new RTCSessionDescription(sdp))
+              this.socketio.emit('client-answer', {
+                'sdp': sdp, 'user': this.userId, 'streamer': this.streamerId
+              })
+            })
+        })
+          .catch(error => {
+            console.log('an error occured', error)
+          })
+    },
+    onIceCandidate: function (peer, evt) {
+      console.log('onIceCandidate')
+      // console.log(this.room)
+      if (evt.candidate) {
+        console.log('candidato')
+        console.log(evt.candidate)
+        this.socketio.emit('client-candidate', {
+          'candidate': evt.candidate,
+          'user': this.userId,
+          'streamer': this.streamerId
+        })
+      }
+    },
+    clientAnswer: function (answer) {
+      return this.getCam()
+        .then((stream) => {
+          this.localUserMedia = stream
+          // this.toggleEndCallButton()
+          if (window.URL) {
+            document.getElementById('selfview').srcObject = stream
+          } else {
+            document.getElementById('selfview').src = stream
+          }
+          this.caller.addStream(stream)
+          this.caller.setRemoteDescription(new RTCSessionDescription(answer.sdp))
+        })
+    },
+    clientCandidate: function (msg) {
+      this.caller.addIceCandidate(new RTCIceCandidate(msg.candidate))
+    }
+  },
+  created: function () {
+    console.log('created')
+  },
+  mounted () {
+    console.log('mounted')
+    console.log(this.theSocket)
+    this.socketio = io('http://localhost:8100/qwerasdfqwer')
+    console.log(this.socketio)
+
+    this.prepareCaller()
+    GetRTCPeerConnection()
+    GetRTCSessionDescription()
+    GetRTCIceCandidate()
+    function GetRTCIceCandidate () {
+      window.RTCIceCandidate = window.RTCIceCandidate || window.webkitRTCIceCandidate ||
+          window.mozRTCIceCandidate || window.msRTCIceCandidate
+      return window.RTCIceCandidate
+    }
+    function GetRTCPeerConnection () {
+      window.RTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection ||
+          window.mozRTCPeerConnection || window.msRTCPeerConnection
+      return window.RTCPeerConnection
+    }
+    function GetRTCSessionDescription () {
+      window.RTCSessionDescription = window.RTCSessionDescription || window.webkitRTCSessionDescription ||
+          window.mozRTCSessionDescription || window.msRTCSessionDescription
+      return window.RTCSessionDescription
+    }
+
+    this.socketio.on('client-answer', (data) => {
+      console.log('clientAnswer')
+      // check if answer is for me
+      if (this.userId == data.user) {
+        console.log('ignoring my answer')
+      } else {
+        console.log('accepting answer')
+        this.clientAnswer(data)
+      }
+    })
+
+    // viene del server
+    this.socketio.on('client-sdp', (data) => {
+      console.log('clientSDP server')
+      if (this.userId == data.from) {
+        console.log('ignored')
+        return null
+      } else {
+        this.streamerId = data.streamer
+        return this.clientSDP(data)
+      }
+    })
+
+    this.socketio.on('streamer', (data) => {
+      console.log('streamer')
+      console.log(data)
+      this.isStreamer = data.isStreamer
+      this.enterConference()
+    })
   }
 }
 </script>
