@@ -25,7 +25,8 @@ export default {
       streamerId: null,
       localsdp: null,
       remotesdp: null,
-      localUserMedia: null
+      localUserMedia: null,
+      sessionDesc: null
     }
   },
   methods: {
@@ -45,6 +46,7 @@ export default {
       // Listen for ICE Candidates and send them to remote peers
       let onice = function (evt) {
         console.log('onicecandidate called')
+        console.log(evt)
         if (!evt.candidate) return
         this.onIceCandidate(this.caller, evt)
       }
@@ -52,6 +54,7 @@ export default {
       // onaddstream handler to receive remote feed and show in remoteview video element
       this.caller.onaddstream = function (evt) {
         console.log('onaddstream called')
+        console.log(window.URL)
         if (window.URL) {
           document.getElementById('remoteview').srcObject = evt.stream
         } else {
@@ -63,65 +66,55 @@ export default {
       console.log('...joining ' + this.theSocket.namespace)
       if (!this.isStreamer) {
         console.log('no es streamer')
-        this.caller.createOffer()
-          .then((desc) => {
-            console.log(desc)
-            this.caller.setLocalDescription(new RTCSessionDescription(desc))
-            this.socketio.emit('client-sdp',{
-              'sdp': desc,
-              'userId': this.userId
-              })
+        this.getCam()
+          .then((stream) => {
+            this.localUserMedia = stream
+            if (window.URL) {
+              document.getElementById('selfview').srcObject = stream
+            } else {
+              document.getElementById('selfview').src = stream
+            }
+            this.caller.addStream(stream)
+            this.caller.createOffer()
+            .then((desc) => {
+              console.log('setting local description')
+              this.caller.setLocalDescription(new RTCSessionDescription(desc))
+              this.socketio.emit('client-sdp',{
+                'sdp': desc,
+                'userId': this.userId
+                })
+            })
           })
       } else {
-        /*
         this.getCam()
-        .then((stream) => {
-          if (window.URL) {
-            document.getElementById('selfview').srcObject = stream
-          } else {
-            document.getElementById('selfview').src = stream
-          }
-          // this.toggleEndCallButton()
-          this.caller.addStream(stream)
-          this.localUserMedia = stream
-          return this.caller.createOffer()
-          .then((desc) => {
-            this.caller.setLocalDescription(new RTCSessionDescription(desc))
-            this.socketio.emit('client-sdp', {'sdp': desc})
+          .then((stream) => {
+            this.caller.addStream(stream)
+            this.localUserMedia = stream
+            if (window.URL) {
+              document.getElementById('selfview').srcObject = stream
+            } else {
+              document.getElementById('selfview').src = stream
+            }
           })
-          .catch(error => {
-            console.log('an error occured', error)
-          })
-        })
-        */
       }
     },
     clientSDP: function (msg) {
       console.log('enter clientSDP')
       // pidiendo al streamer que encienda su camara
-      this.getCam()
-        .then(stream => {
-          this.localUserMedia = stream
-          // this.toggleEndCallButton()
-          if (window.URL) {
-            document.getElementById('selfview').srcObject = stream
-          } else {
-            document.getElementById('selfview').src = stream
-          }
-          this.caller.addStream(stream)
-          let sessionDesc = new RTCSessionDescription(msg.sdp)
-          this.caller.setRemoteDescription(sessionDesc)
-          this.caller.createAnswer()
-            .then((sdp) => {
-              this.caller.setLocalDescription(new RTCSessionDescription(sdp))
-              this.socketio.emit('client-answer', {
-                'sdp': sdp, 'user': this.userId, 'streamer': this.streamerId
-              })
-            })
-        })
-          .catch(error => {
-            console.log('an error occured', error)
+      this.sessionDesc = new RTCSessionDescription(msg.sdp)
+      console.log('setting remote description')
+      this.caller.setRemoteDescription(this.sessionDesc)
+      this.caller.createAnswer()
+        .then((sdp) => {
+          console.log('setting local description')
+          this.caller.setLocalDescription(new RTCSessionDescription(sdp))
+          this.socketio.emit('client-answer', {
+            'sdp': sdp, 'user': this.userId, 'streamer': this.streamerId
           })
+        })
+      .catch(error => {
+        console.log('an error occured', error)
+      })
     },
     onIceCandidate: function (peer, evt) {
       console.log('onIceCandidate')
@@ -137,18 +130,9 @@ export default {
       }
     },
     clientAnswer: function (answer) {
-      return this.getCam()
-        .then((stream) => {
-          this.localUserMedia = stream
-          // this.toggleEndCallButton()
-          if (window.URL) {
-            document.getElementById('selfview').srcObject = stream
-          } else {
-            document.getElementById('selfview').src = stream
-          }
-          this.caller.addStream(stream)
-          this.caller.setRemoteDescription(new RTCSessionDescription(answer.sdp))
-        })
+      //  this.caller.addStream(stream)
+      console.log('setting remote description')
+      this.caller.setRemoteDescription(new RTCSessionDescription(answer.sdp))
     },
     clientCandidate: function (msg) {
       this.caller.addIceCandidate(new RTCIceCandidate(msg.candidate))
@@ -163,10 +147,10 @@ export default {
     this.socketio = io('http://localhost:8100/qwerasdfqwer')
     console.log(this.socketio)
 
-    this.prepareCaller()
     GetRTCPeerConnection()
     GetRTCSessionDescription()
     GetRTCIceCandidate()
+    this.prepareCaller()
     function GetRTCIceCandidate () {
       window.RTCIceCandidate = window.RTCIceCandidate || window.webkitRTCIceCandidate ||
           window.mozRTCIceCandidate || window.msRTCIceCandidate
@@ -211,6 +195,14 @@ export default {
       console.log(data)
       this.isStreamer = data.isStreamer
       this.enterConference()
+    })
+
+    this.socketio.on('client-candidate', (data) => {
+      if (data.from == this.userId) {
+        console.log('ignore candidate')
+      } else {
+        this.clientCandidate(data)
+      }
     })
   }
 }
